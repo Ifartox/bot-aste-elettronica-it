@@ -3,7 +3,7 @@ name: Monitoraggio IT e Attrezzature
 on:
   schedule:
     # Esecuzione alle 08:00 italiane (06:00 UTC)
-    - cron: '0 6 * * *'
+    - cron: '0 9 * * *'
   workflow_dispatch:
 
 jobs:
