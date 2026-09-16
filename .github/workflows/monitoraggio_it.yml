@@ -1,0 +1,38 @@
+name: Monitoraggio IT e Attrezzature
+
+on:
+  schedule:
+    # Esecuzione alle 08:00 italiane (06:00 UTC)
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout codice
+        uses: actions/checkout@v4
+
+      - name: Configura Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Installa dipendenze
+        run: |
+          pip install requests beautifulsoup4 google-genai
+
+      - name: Esegui Bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python main.py
+
+      - name: Salva memoria e stato
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add it_attrezzature_viste.txt ultimo_invio_it.txt || true
+          git commit -m "Auto-update memoria IT [skip ci]" || true
+          git push || true
