@@ -368,7 +368,7 @@ if __name__ == "__main__":
         )
         invia_telegram_html(intro)
 
-        for l in selezionati:
+      for l in selezionati:
             aud = l["audit"]
             scheda = (
                 f"🏷 <b>{safe_html(l['comune'].upper())}</b> — <a href=\"{safe_html(l['link'])}\">{safe_html(l['id'])}</a>\n\n"
@@ -377,4 +377,8 @@ if __name__ == "__main__":
                 f"💰 <b>Offerta Minima:</b> <code>{safe_html(l['offerta_minima'])}</code> <i>(Budget rispettato)</i>\n"
                 f"📈 <b>Valore Usato Stimato:</b> <code>~€ {aud.get('valore_usato_stimato', 'N.D.'):,}</code>\n"
                 f"💵 <b>Margine Netto Potenziale:</b> <code>+€ {aud.get('profitto_stimato', 'N.D.'):,}</code>\n"
-                f"🚗 <b>Trasporto:</b> <code>{safe_html(aud.get('trasportabilita'))}</code> | <b>Liquidità bene:</b> <code>{safe_html(aud.get('rivendibilita'))
+                f"🚗 <b>Trasporto:</b> <code>{safe_html(aud.get('trasportabilita'))}</code> | <b>Liquidità bene:</b> <code>{safe_html(aud.get('rivendibilita'))}</code>\n"
+                f"📅 <b>Data Asta:</b> <code>{safe_html(l['data_asta'])}</code>\n\n"
+                f"💡 <b>ANALISI ESPERTO:</b>\n<i>{safe_html(aud.get('giudizio'))}</i>"
+            )
+            invia_telegram_html(scheda)
