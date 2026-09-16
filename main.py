@@ -368,7 +368,7 @@ if __name__ == "__main__":
         )
         invia_telegram_html(intro)
 
-      for l in selezionati:
+        for l in selezionati:
             aud = l["audit"]
             scheda = (
                 f"🏷 <b>{safe_html(l['comune'].upper())}</b> — <a href=\"{safe_html(l['link'])}\">{safe_html(l['id'])}</a>\n\n"
@@ -382,3 +382,8 @@ if __name__ == "__main__":
                 f"💡 <b>ANALISI ESPERTO:</b>\n<i>{safe_html(aud.get('giudizio'))}</i>"
             )
             invia_telegram_html(scheda)
+
+        aggiorna_data_ultimo_invio()
+
+    segna_visti([l["chiave_tracciamento"] for l in lotti_arricchiti if l.get("chiave_tracciamento")])
+    print("=== MONITORAGGIO CONCLUSO ===")
