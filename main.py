@@ -24,20 +24,16 @@ session.headers.update({
     "Accept-Language": "it-IT,it;q=0.9",
 })
 
+# Blacklist tassativa: zero veicoli, zero ingombri logistici pesanti
 BLACKLIST_CATEGORICA = [
-    # Veicoli e trasporti
+    # Veicoli e ruote
     "autovettura", "autocarro", "fiat", "iveco", "volkswagen", "audi", "bmw", "mercedes",
     "furgone", "scooter", "motociclo", "moto", "piaggio", "targa", "telaio", "rimorchio",
-    # Macchinari pesanti e ingombri logistici
+    "trattore", "semirimorchio", "autoveicolo",
+    # Macchinari pesanti e ingombri industriali
     "scaffalatur", "tornio", "pressa", "fresatrice", "ponteggio", "gru", "container",
     "caldaia", "silo", "cisterna", "fusto", "tessitura", "filatoio", "rame", "rottam",
-    "scrivania", "tavolo riunioni", "armadio", "arredo", "sedia", "poltrona"
-]
-
-WHITELIST_FOCUS = [
-    "pc", "computer", "notebook", "laptop", "macbook", "apple", "server", "monitor",
-    "stampante", "plotter", "fotocamera", "attrezzatur", "trapano", "avvitatore", "hilti",
-    "bosch", "dewalt", "makita", "elettroutensil", "saldatrice", "laser", "caffè", "strumento"
+    "scrivania", "tavolo riunioni", "armadio", "sedia", "poltrona"
 ]
 
 
@@ -115,7 +111,7 @@ def e_data_valida_non_passata(data_str):
         return True
 
 
-def scansiona_catalogo_it_attrezzature(citta="firenze", max_pagine=2):
+def scansiona_catalogo_mobili(citta="firenze", max_pagine=3):
     lotti = []
     ids_rilevati = set()
     base_url = f"https://www.astalegale.net/Mobili?luoghi={citta.lower()}"
@@ -145,10 +141,8 @@ def scansiona_catalogo_it_attrezzature(citta="firenze", max_pagine=2):
                     titolo_str = " ".join(titolo_pulito.split())[:140]
                     titolo_lower = titolo_str.lower()
 
+                    # Scarta solo se contiene esplicitamente veicoli o ingombri pesanti
                     if any(b in titolo_lower for b in BLACKLIST_CATEGORICA):
-                        continue
-
-                    if not any(w in titolo_lower for w in WHITELIST_FOCUS):
                         continue
 
                     link_completo = href if href.startswith("http") else f"https://www.astalegale.net{href}"
@@ -161,7 +155,7 @@ def scansiona_catalogo_it_attrezzature(citta="firenze", max_pagine=2):
                     })
                     trovati += 1
 
-            print(f"[{citta.upper()}] Pagina {pagina}: individuati {trovati} lotti IT/Attrezzature.")
+            print(f"[{citta.upper()}] Pagina {pagina}: individuati {trovati} lotti non veicolari.")
             if trovati == 0:
                 break
             time.sleep(0.8)
@@ -207,15 +201,21 @@ def estrai_dati_scheda(lotto):
         if m_data:
             dati["data_asta"] = m_data.group(1).replace("-", "/").replace(".", "/").strip()
 
+        # Estrazione blocchi descrittivi
         blocchi = []
-        chiavi = WHITELIST_FOCUS + ["marca", "modello", "funzionante", "condizioni", "lotto", "quantità"]
+        chiavi_rilevanti = [
+            "pc", "computer", "notebook", "laptop", "macbook", "apple", "server", "monitor",
+            "stampante", "plotter", "fotocamera", "attrezzatur", "trapano", "avvitatore", "hilti",
+            "bosch", "dewalt", "makita", "elettroutensil", "saldatrice", "laser", "caffè", "strumento",
+            "descrizione", "bene", "lotto", "marca", "modello", "quantità"
+        ]
         for el in soup.find_all(["p", "tr", "td", "li", "dd"]):
             txt = " ".join(el.get_text(" ", strip=True).split())
-            if 15 <= len(txt) <= 800 and any(k in txt.lower() for k in chiavi):
+            if 15 <= len(txt) <= 800 and any(k in txt.lower() for k in chiavi_rilevanti):
                 if not any(txt in b for b in blocchi):
                     blocchi.append(txt)
 
-        dati["testo_perizia"] = "\n".join(blocchi[:8]) if blocchi else testo_pulito[:2500]
+        dati["testo_perizia"] = "\n".join(blocchi[:10]) if blocchi else testo_pulito[:2500]
 
     except Exception as e:
         print(f"[ERRORE Lettura Bene {lotto['id']}]: {e}")
@@ -233,34 +233,34 @@ def audit_beni_batch(batch_lotti):
             "comune": l["comune"],
             "titolo": l["titolo"],
             "offerta_minima": l["offerta_minima"],
-            "descrizione": l["testo_perizia"][:2000]
+            "descrizione": l["testo_perizia"][:2500]
         }
         for l in batch_lotti
     ]
 
     prompt = f"""
-    Sei un perito commerciale specializzato in compravendita di IT, elettronica e attrezzature professionali usate.
-    Valuta questo gruppo di lotti per un acquirente privato con BUDGET MASSIMO DI 1.000 € e NESSUN MAGAZZINO:
+    Sei un perito commerciale esperto in aste giudiziarie di beni mobili, IT e attrezzature professionali.
+    Valuta questo gruppo di lotti per un acquirente privato con BUDGET MASSIMO DI 1.000 € e NESSUN MAGAZZINO DI STOCCAGGIO:
     {json.dumps(payload_ai, ensure_ascii=False, indent=2)}
 
     CRITERI DI SELEZIONE RIGIDI:
-    1. ZERO VEICOLI: Se un lotto si rivela un veicolo o mezzo di trasporto, assegna 'SCARTATO'.
-    2. STOCCAGGIO COMPATTO: Ammetti solo 'PORTATILE' (entra comodamente nel baule di un'utilitaria e si ripone in casa/garage). Scarta se ingombrante.
-    3. VALUTAZIONE ECONOMICA: Stima il valore realistico di realizzo usato su Subito/eBay. Calcola il profitto netto togliendo l'offerta minima e un 15% di oneri d'asta.
-    4. VERDETTO: 'ACQUISTO CONSIGLIATO' se l'oggetto è trasportabile, richiesto sul mercato e conveniente. Altrimenti 'SCARTATO'.
+    1. ZERO VEICOLI: Se un lotto si rivela essere un'auto, moto, scooter, autocarro o rimorchio, assegna 'SCARTATO'.
+    2. STOCCAGGIO COMPATTO (FONDAMENTALE): Ammetti solo 'PORTATILE' (lotti di computer, laptop, monitor, tablet, fotocamere, piccoli elettroutensili da valigetta come trapani o saldatrici portatili, macchine caffè banco). Scarta come 'INGOMBRANTE' tutto ciò che richiede furgoni, scaffali industriali o stoccaggio ingombrante.
+    3. VALUTAZIONE ECONOMICA: Stima il valore realistico di realizzo usato (es. su Subito o eBay). Calcola il profitto netto togliendo l'offerta minima e un 15% di oneri d'asta.
+    4. VERDETTO: 'ACQUISTO CONSIGLIATO' solo se il lotto è PORTATILE, richiesto sul mercato e conveniente. Altrimenti 'SCARTATO'.
 
     Rispondi RIGOROSAMENTE in JSON conforme a questo schema:
     {{
       "risultati": [
         {{
           "id": "ID_LOTTO",
-          "categoria": "IT / Elettronica / Attrezzatura / Ufficio Pregio",
+          "categoria": "IT / Elettronica / Attrezzatura / Altro",
           "trasportabilita": "PORTATILE oppure INGOMBRANTE",
-          "valore_usato_stimato": 650,
-          "profitto_stimato": 280,
+          "valore_usato_stimato": 450,
+          "profitto_stimato": 180,
           "rivendibilita": "ALTA oppure MEDIA",
           "verdetto": "ACQUISTO CONSIGLIATO oppure SCARTATO",
-          "giudizio": "Sintetica motivazione commerciale"
+          "giudizio": "Sintetica spiegazione commerciale del lotto"
         }}
       ]
     }}
@@ -293,14 +293,11 @@ if __name__ == "__main__":
     FILTRA_GIA_VISTE = True
     visti = carica_visti()
 
-    lotti_fi = scansiona_catalogo_it_attrezzature("firenze", max_pagine=2)
-    lotti_po = scansiona_catalogo_it_attrezzature("prato", max_pagine=2)
+    lotti_fi = scansiona_catalogo_mobili("firenze", max_pagine=3)
+    lotti_po = scansiona_catalogo_mobili("prato", max_pagine=3)
     totali = lotti_fi + lotti_po
 
-    print(f"Lotti pre-selezionati per categoria: {len(totali)}")
-    if not totali:
-        print("Nessun lotto rilevato nelle categorie richieste.")
-        exit(0)
+    print(f"Lotti non veicolari individuati a catalogo: {len(totali)}")
 
     lotti_arricchiti = []
     for i, lotto in enumerate(totali, start=1):
@@ -308,51 +305,45 @@ if __name__ == "__main__":
         ch_data = str(lotto.get("data_asta", "ND")).strip().replace(" ", "_")
         lotto["chiave_tracciamento"] = f"IT_{lotto['id']}_{ch_data}_{lotto['stato_procedura']}"
         lotti_arricchiti.append(lotto)
-        time.sleep(0.7)
+        time.sleep(0.6)
 
+    # Filtro budget rigido: tra 30 € e 1.000 €
     candidati = []
     for l in lotti_arricchiti:
         if FILTRA_GIA_VISTE and l["chiave_tracciamento"] in visti:
             continue
         if l["stato_procedura"] == "SOSPESA":
             continue
-        if 50 <= l["prezzo_num"] <= 1000 and e_data_valida_non_passata(l.get("data_asta", "")):
+        if 30 <= l["prezzo_num"] <= 1000 and e_data_valida_non_passata(l.get("data_asta", "")):
             candidati.append(l)
 
-    print(f"Lotti idonei entro il budget di 1.000€: {len(candidati)}")
-
-    dizionario_audit = {}
-    dimensione_batch = 4
-    for i in range(0, len(candidati), dimensione_batch):
-        batch = candidati[i:i + dimensione_batch]
-        if batch:
-            dizionario_audit.update(audit_beni_batch(batch))
-            time.sleep(1.8)
-
-    selezionati = []
-    for l in candidati:
-        aud = dizionario_audit.get(l["id"], {})
-        l["audit"] = aud
-        if aud.get("verdetto") == "ACQUISTO CONSIGLIATO" and aud.get("trasportabilita") == "PORTATILE":
-            selezionati.append(l)
-
-    selezionati = sorted(selezionati, key=lambda x: x["audit"].get("profitto_stimato", 0), reverse=True)[:3]
-
-    if not selezionati:
-        print("Nessun affare IT/attrezzature entro i 1.000€ da notificare oggi.")
+    print(f"Candidati all'audit forense/commerciale AI (<= 1.000€): {len(candidati)}")
+if not selezionati:
+        print("Nessun affare compatto entro i 1.000€ trovato oggi.")
         data_ultimo = leggi_data_ultimo_invio()
         adesso = datetime.now()
-        giorni = (adesso - data_ultimo).days if data_ultimo else 999
 
-        if giorni >= 7:
-            msg_hb = (
-                "ℹ️ <b>RADAR IT &amp; ATTREZZATURE (BUDGET &le; 1.000 €)</b>\n\n"
-                "Il bot è regolarmente attivo e operativo.\n"
-                "<i>Nessun lotto compatto di elettronica o attrezzatura professionale rilevato negli ultimi 7 giorni tra Firenze e Prato.</i>\n\n"
-                "La scansione prosegue quotidianamente."
+        # Se è il primo avvio in assoluto
+        if data_ultimo is None:
+            msg_primo_avvio = (
+                "🤖 <b>RADAR IT &amp; ATTREZZATURE AVVIATO</b>\n\n"
+                "Il bot è collegato con successo e operativo.\n"
+                "<i>Nessun lotto compatto idoneo (budget &le; 1.000 €) rilevato oggi a catalogo tra Firenze e Prato.</i>\n\n"
+                "La scansione quotidiana è attiva: riceverai notifiche non appena verranno pubblicati beni conformi."
             )
-            invia_telegram_html(msg_hb)
+            invia_telegram_html(msg_primo_avvio)
             aggiorna_data_ultimo_invio()
+        else:
+            giorni = (adesso - data_ultimo).days
+            if giorni >= 7:
+                msg_hb = (
+                    "ℹ️ <b>RADAR IT &amp; ATTREZZATURE (BUDGET &le; 1.000 €)</b>\n\n"
+                    "Il bot è regolarmente <b>attivo e operativo</b>.\n"
+                    "<i>Nessun lotto compatto di elettronica o attrezzatura professionale rilevato negli ultimi 7 giorni tra Firenze e Prato.</i>\n\n"
+                    "La scansione quotidiana prosegue in background."
+                )
+                invia_telegram_html(msg_hb)
+                aggiorna_data_ultimo_invio()
     else:
         intro = (
             f"💻 <b>AFFARI IT &amp; ATTREZZATURE (BUDGET &le; 1.000 €)</b>\n\n"
