@@ -141,7 +141,6 @@ def scansiona_catalogo_mobili(citta="firenze", max_pagine=3):
                     titolo_str = " ".join(titolo_pulito.split())[:140]
                     titolo_lower = titolo_str.lower()
 
-                    # Scarta solo se contiene esplicitamente veicoli o ingombri pesanti
                     if any(b in titolo_lower for b in BLACKLIST_CATEGORICA):
                         continue
 
@@ -201,7 +200,6 @@ def estrai_dati_scheda(lotto):
         if m_data:
             dati["data_asta"] = m_data.group(1).replace("-", "/").replace(".", "/").strip()
 
-        # Estrazione blocchi descrittivi
         blocchi = []
         chiavi_rilevanti = [
             "pc", "computer", "notebook", "laptop", "macbook", "apple", "server", "monitor",
@@ -318,12 +316,31 @@ if __name__ == "__main__":
             candidati.append(l)
 
     print(f"Candidati all'audit forense/commerciale AI (<= 1.000€): {len(candidati)}")
-if not selezionati:
+
+    # Esecuzione audit con Gemini
+    dizionario_audit = {}
+    dimensione_batch = 4
+    for i in range(0, len(candidati), dimensione_batch):
+        batch = candidati[i:i + dimensione_batch]
+        if batch:
+            dizionario_audit.update(audit_beni_batch(batch))
+            time.sleep(1.8)
+
+    # Filtraggio: solo acquisti consigliati e portatili
+    selezionati = []
+    for l in candidati:
+        aud = dizionario_audit.get(l["id"], {})
+        l["audit"] = aud
+        if aud.get("verdetto") == "ACQUISTO CONSIGLIATO" and aud.get("trasportabilita") == "PORTATILE":
+            selezionati.append(l)
+
+    selezionati = sorted(selezionati, key=lambda x: x["audit"].get("profitto_stimato", 0), reverse=True)[:3]
+
+    if not selezionati:
         print("Nessun affare compatto entro i 1.000€ trovato oggi.")
         data_ultimo = leggi_data_ultimo_invio()
         adesso = datetime.now()
 
-        # Se è il primo avvio in assoluto
         if data_ultimo is None:
             msg_primo_avvio = (
                 "🤖 <b>RADAR IT &amp; ATTREZZATURE AVVIATO</b>\n\n"
@@ -360,13 +377,4 @@ if not selezionati:
                 f"💰 <b>Offerta Minima:</b> <code>{safe_html(l['offerta_minima'])}</code> <i>(Budget rispettato)</i>\n"
                 f"📈 <b>Valore Usato Stimato:</b> <code>~€ {aud.get('valore_usato_stimato', 'N.D.'):,}</code>\n"
                 f"💵 <b>Margine Netto Potenziale:</b> <code>+€ {aud.get('profitto_stimato', 'N.D.'):,}</code>\n"
-                f"🚗 <b>Trasporto:</b> <code>{safe_html(aud.get('trasportabilita'))}</code> | <b>Liquidità bene:</b> <code>{safe_html(aud.get('rivendibilita'))}</code>\n"
-                f"📅 <b>Data Asta:</b> <code>{safe_html(l['data_asta'])}</code>\n\n"
-                f"💡 <b>ANALISI ESPERTO:</b>\n<i>{safe_html(aud.get('giudizio'))}</i>"
-            )
-            invia_telegram_html(scheda)
-
-        aggiorna_data_ultimo_invio()
-
-    segna_visti([l["chiave_tracciamento"] for l in lotti_arricchiti if l.get("chiave_tracciamento")])
-    print("=== MONITORAGGIO CONCLUSO ===")
+                f"🚗 <b>Trasporto:</b> <code>{safe_html(aud.get('trasportabilita'))}</code> | <b>Liquidità bene:</b> <code>{safe_html(aud.get('rivendibilita'))
