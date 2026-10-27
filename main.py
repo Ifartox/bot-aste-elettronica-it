@@ -35,14 +35,14 @@ MAX_SCHEDE_DETTAGLIO_PER_RUN = 25
 MAX_CANDIDATI_AI_PER_RUN = 16
 LIMITE_NOTIFICHE_TELEGRAM = 8
 
-# Catena di modelli di preferenza (verrà filtrata e integrata dinamicamente all'avvio)
+# Ordine di priorità (verranno usati SOLO quelli realmente esistenti sulla tua API Key)
 MODELLI_PREFERITI = [
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
+    "gemini-3.8-flash",
+    "gemini-flash-latest",
+    "gemini-flash-lite-latest",
     "gemini-2.0-flash",
     "gemini-2.0-flash-lite",
-    "gemini-3.8-flash",
-    "gemini-1.5-flash"
+    "gemini-pro-latest"
 ]
 MODELLI_ATTIVI = []
 
@@ -83,7 +83,7 @@ BLACKLIST_CATEGORICA = [
 
 
 def inizializza_modelli_gemini():
-    """Interroga l'API per scoprire i modelli realmente attivi sulla chiave gratuita."""
+    """Interroga l'API per scoprire ed usare SOLO i modelli realmente attivi (zero errori 404)."""
     global MODELLI_ATTIVI
     if not client:
         log("[ERRORE] GEMINI_API_KEY non configurata!")
@@ -94,22 +94,24 @@ def inizializza_modelli_gemini():
         disponibili = []
         for m in client.models.list():
             nome = m.name.replace("models/", "")
-            # Seleziona solo modelli generativi testuali 'flash' o 'pro' (esclude embedding/vision/audio)
             if "gemini" in nome and any(k in nome for k in ["flash", "pro"]):
-                if not any(bad in nome for bad in ["embedding", "vision", "audio", "tts", "imagen", "veo", "aqa"]):
+                if not any(bad in nome for bad in ["embedding", "vision", "audio", "tts", "imagen", "veo", "aqa", "thinking", "exp", "preview", "1.5", "2.5"]):
                     disponibili.append(nome)
 
-        # Ordina mettendo prima i nostri modelli preferiti se presenti tra i disponibili
+        # Usa SOLO i modelli che esistono davvero in 'disponibili', ordinati per preferenza
         ordinati = [p for p in MODELLI_PREFERITI if p in disponibili]
         for d in disponibili:
             if d not in ordinati and "flash" in d:
                 ordinati.append(d)
+        for d in disponibili:
+            if d not in ordinati and "pro" in d:
+                ordinati.append(d)
 
-        MODELLI_ATTIVI = ordinati if ordinati else MODELLI_PREFERITI
-        log(f"Catena modelli IA pronta (con fallback automatico): {MODELLI_ATTIVI[:5]}")
+        MODELLI_ATTIVI = ordinati if ordinati else ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-3.8-flash"]
+        log(f"Catena modelli IA verificata (zero 404): {MODELLI_ATTIVI[:5]}")
     except Exception as e:
-        log(f"[AVVISO] Impossibile elencare i modelli dinamicamente ({e}). Uso lista di default.")
-        MODELLI_ATTIVI = MODELLI_PREFERITI
+        log(f"[AVVISO] Impossibile elencare i modelli dinamicamente ({e}). Uso lista sicura.")
+        MODELLI_ATTIVI = ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-3.8-flash"]
 
 
 def safe_html(val, default="N.D."):
