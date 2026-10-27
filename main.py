@@ -450,8 +450,8 @@ def estrai_dati_scheda(lotto):
 
 def chiama_gemini_json(prompt):
     """
-    Chiama Gemini applicando un timeout rigido di 20s per singola richiesta
-    e cambiando immediatamente modello in caso di errore 503, 429 o 404.
+    Chiama Gemini con timeout di 35s (anti-504), rotazione immediata dei modelli su 503
+    e pausa di raffreddamento reale su 429 per rispettare il piano gratuito.
     """
     if not client or not MODELLI_ATTIVI:
         return {}
@@ -464,7 +464,7 @@ def chiama_gemini_json(prompt):
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     temperature=0.1,
-                    http_options=types.HttpOptions(timeout=20000),  # 20 secondi max (in millisecondi)
+                    http_options=types.HttpOptions(timeout=35000),  # 35 secondi max (evita i 504 prematuri)
                 ),
             )
             testo = (response.text or "").strip()
@@ -479,15 +479,15 @@ def chiama_gemini_json(prompt):
                 log(f"[GEMINI] Modello {modello} non trovato (404). Rimosso dalla catena.")
                 if modello in MODELLI_ATTIVI:
                     MODELLI_ATTIVI.remove(modello)
-            elif "503" in err_str or "UNAVAILABLE" in err_str:
-                log(f"[GEMINI] {modello} sovraccarico (503). Passo subito al modello di fallback...")
-                time.sleep(2)
-            elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                log(f"[GEMINI] Quota raggiunta su {modello} (429). Passo al modello di fallback...")
+            elif "503" in err_str or "UNAVAILABLE" in err_str or "504" in err_str or "DEADLINE_EXCEEDED" in err_str:
+                log(f"[GEMINI] {modello} lento o sovraccarico (503/504). Passo al modello successivo tra 4s...")
                 time.sleep(4)
+            elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                log(f"[GEMINI] Limite chiamate/minuto raggiunto su {modello} (429). Pausa di 15s per ricaricare la quota...")
+                time.sleep(15)
             else:
                 log(f"[GEMINI ERRORE su {modello}]: {e}")
-                time.sleep(2)
+                time.sleep(3)
 
     log("[GEMINI CRITICO] Tutti i modelli della catena hanno dato errore per questo batch.")
     return {}
