@@ -1,9 +1,9 @@
-name: Monitoraggio IT e Attrezzature
+name: Monitoraggio Aste Terreni
 
 on:
   schedule:
-    # Esecuzione alle 08:00 italiane (06:00 UTC)
-    - cron: '0 9 * * *'
+    # Esecuzione settimanale: ogni lunedì alle 08:00 UTC
+    - cron: '0 8 * * 1'
   workflow_dispatch:
 
 jobs:
@@ -33,6 +33,6 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add it_attrezzature_viste.txt ultimo_invio_it.txt || true
-          git commit -m "Auto-update memoria IT [skip ci]" || true
+          git add terreni_visti.txt ultimo_invio_terreni.txt || true
+          git commit -m "Auto-update memoria Terreni [skip ci]" || true
           git push || true
