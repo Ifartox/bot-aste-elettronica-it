@@ -267,7 +267,7 @@ def estrai_superficie_terreno(testo):
 
     # 2. Cerca Metri Quadri (es. "1.500 mq", "mq 3400", "m² 850")
     matches_mq = re.findall(r"(\d{1,3}(?:\.\d{3})+|\d{3,6})\s*(?:mq|m²|metri\s*quadr)", testo, re.IGNORECASE)
-     matches_mq += re.findall(r"(?:superficie|consistenza|mq|m²)\s*[:\.]?\s*(\d{1,3}(?:\.\d{3})+|\d{3,6})\b", testo, re.IGNORECASE)
+    matches_mq += re.findall(r"(?:superficie|consistenza|mq|m²)\s*[:\.]?\s*(\d{1,3}(?:\.\d{3})+|\d{3,6})\b", testo, re.IGNORECASE)
     
     valori_mq = []
     for m in matches_mq:
