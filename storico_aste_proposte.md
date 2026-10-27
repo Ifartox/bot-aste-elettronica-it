@@ -13,3 +13,6 @@
 | **18/11/2026** | **72/100** | Scandicci | € 6.187,50 | 5.110 mq | € 1.21/mq | Agricolo | Libero - Standard | [2430666](https://www.astalegale.net/Aste/Detail/B2430666-Terreno-Via-della-Caduta-9-Scandicci) |
 | **17/12/2026** | **65/100** | Montaione | € 16.123,15 | N.D. | N.D. | Edificabile | Libero - Standard | [2433812](https://www.astalegale.net/Aste/Detail/B2433812-Lotto-edificabile-Via-XVIII-Luglio-5-Montaione) |
 | **20/01/2027** | **65/100** | Reggello | € 48.000,00 | 3.500 mq | € 13.71/mq | Agricolo / Uliveto | Libero - Procedura esecutiva immobiliare Trib | [2437442](https://www.astalegale.net/Aste/Detail/B2437442-Terreno-Localita-Caselli-La-Torre-Reggello) |
+| **25/11/2026** | **85/100** | Poggibonsi | € 2.880,00 | 220.000 mq | € 0.01/mq | Pascolo Arborato | Libero - Standard | [2434214](https://www.astalegale.net/Aste/Detail/B2434214-Terreno-Localit-Caterozzoli-Poggibonsi) |
+| **12/11/2026** | **85/100** | Reggello | € 48.000,00 | 15.590 mq | € 3.08/mq | Agricolo | Libero - Standard | [2431603](https://www.astalegale.net/Aste/Detail/B2431603-Terreno-Via-Ponte-Vecchio-3-Reggello) |
+| **25/11/2026** | **80/100** | Poggibonsi | € 2.880,00 | 60.000 mq | € 0.05/mq | Seminativo Arborato | Libero - Standard | [2434217](https://www.astalegale.net/Aste/Detail/B2434217-Terreno--Loc-Caterozzoli----Via-Montecervino-Poggibonsi) |
