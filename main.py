@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import html
 import json
 import time
@@ -8,6 +9,13 @@ import requests
 from bs4 import BeautifulSoup
 from google import genai
 from google.genai import types
+
+# Forza l'output immediato nei log di GitHub Actions (evita l'effetto "bloccato")
+sys.stdout.reconfigure(line_buffering=True)
+
+def log(msg):
+    ora = datetime.now().strftime("%H:%M:%S")
+    print(f"[{ora}] {msg}", flush=True)
 
 # Configurazione Credenziali
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -26,7 +34,17 @@ MAX_PAGINE_PER_COMUNE = 4
 MAX_SCHEDE_DETTAGLIO_PER_RUN = 25
 MAX_CANDIDATI_AI_PER_RUN = 16
 LIMITE_NOTIFICHE_TELEGRAM = 8
-MODELLO_GEMINI = "gemini-3.8-flash"
+
+# Catena di modelli di preferenza (verrà filtrata e integrata dinamicamente all'avvio)
+MODELLI_PREFERITI = [
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-3.8-flash",
+    "gemini-1.5-flash"
+]
+MODELLI_ATTIVI = []
 
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
@@ -64,6 +82,36 @@ BLACKLIST_CATEGORICA = [
 ]
 
 
+def inizializza_modelli_gemini():
+    """Interroga l'API per scoprire i modelli realmente attivi sulla chiave gratuita."""
+    global MODELLI_ATTIVI
+    if not client:
+        log("[ERRORE] GEMINI_API_KEY non configurata!")
+        return
+
+    try:
+        log("Verifica modelli Gemini disponibili sulla tua API Key in corso...")
+        disponibili = []
+        for m in client.models.list():
+            nome = m.name.replace("models/", "")
+            # Seleziona solo modelli generativi testuali 'flash' o 'pro' (esclude embedding/vision/audio)
+            if "gemini" in nome and any(k in nome for k in ["flash", "pro"]):
+                if not any(bad in nome for bad in ["embedding", "vision", "audio", "tts", "imagen", "veo", "aqa"]):
+                    disponibili.append(nome)
+
+        # Ordina mettendo prima i nostri modelli preferiti se presenti tra i disponibili
+        ordinati = [p for p in MODELLI_PREFERITI if p in disponibili]
+        for d in disponibili:
+            if d not in ordinati and "flash" in d:
+                ordinati.append(d)
+
+        MODELLI_ATTIVI = ordinati if ordinati else MODELLI_PREFERITI
+        log(f"Catena modelli IA pronta (con fallback automatico): {MODELLI_ATTIVI[:5]}")
+    except Exception as e:
+        log(f"[AVVISO] Impossibile elencare i modelli dinamicamente ({e}). Uso lista di default.")
+        MODELLI_ATTIVI = MODELLI_PREFERITI
+
+
 def safe_html(val, default="N.D."):
     if val is None or str(val).strip().lower() in ["none", "null", ""]:
         return default
@@ -86,6 +134,7 @@ def segna_visti(chiavi):
         with open(FILE_ARCHIVIO, "a", encoding="utf-8") as f:
             for c in nuove:
                 f.write(f"{c}\n")
+        log(f"Archivio aggiornato: salvati {len(nuove)} nuovi ID in {FILE_ARCHIVIO}.")
 
 
 def leggi_data_ultimo_invio():
@@ -105,12 +154,12 @@ def aggiorna_data_ultimo_invio():
         with open(FILE_ULTIMO_INVIO, "w", encoding="utf-8") as f:
             f.write(datetime.now().isoformat())
     except Exception as e:
-        print(f"[STATO] Errore salvataggio timestamp: {e}")
+        log(f"[STATO] Errore salvataggio timestamp: {e}")
 
 
 def invia_telegram_html(messaggio):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("[ERRORE] Credenziali Telegram mancanti.")
+        log("[ERRORE] Credenziali Telegram mancanti.")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
@@ -120,16 +169,16 @@ def invia_telegram_html(messaggio):
         "disable_web_page_preview": True
     }
     try:
-        r = requests.post(url, json=payload, timeout=12)
+        r = requests.post(url, json=payload, timeout=(5, 12))
         if r.status_code == 429:
             retry_after = r.json().get("parameters", {}).get("retry_after", 5)
             time.sleep(retry_after + 1)
-            requests.post(url, json=payload, timeout=12)
+            requests.post(url, json=payload, timeout=(5, 12))
         elif r.status_code != 200:
             payload.pop("parse_mode", None)
-            requests.post(url, json=payload, timeout=12)
+            requests.post(url, json=payload, timeout=(5, 12))
     except Exception as e:
-        print(f"[TELEGRAM ECCEZIONE]: {e}")
+        log(f"[TELEGRAM ECCEZIONE]: {e}")
     time.sleep(1.0)
 
 
@@ -181,7 +230,7 @@ def aggiorna_storico_markdown(nuovi_lotti):
             for riga in righe_esistenti.values():
                 f.write(f"{riga}\n")
     except Exception as e:
-        print(f"[ERRORE Scrittura Storico MD]: {e}")
+        log(f"[ERRORE Scrittura Storico MD]: {e}")
 
 
 def scansiona_catalogo_comune(citta, stats):
@@ -193,7 +242,7 @@ def scansiona_catalogo_comune(citta, stats):
     for pagina in range(1, MAX_PAGINE_PER_COMUNE + 1):
         url = f"{base_url}&page={pagina}" if pagina > 1 else base_url
         try:
-            r = session.get(url, timeout=12)
+            r = session.get(url, timeout=(5, 12))
             stats["pagine_http"] += 1
             if r.status_code != 200:
                 break
@@ -257,12 +306,12 @@ def scansiona_catalogo_comune(citta, stats):
             if nuovi_id_in_pagina == 0 and pagina > 1:
                 break
 
-            time.sleep(0.35)
+            time.sleep(0.3)
         except requests.exceptions.RequestException as e:
-            print(f"[ERRORE RETE Scansione {citta} pag {pagina}]: {e}")
+            log(f"[TIMEOUT/RETE Scansione {citta} pag {pagina}]: {e}")
             break
         except Exception as e:
-            print(f"[ERRORE Scansione {citta} pag {pagina}]: {e}")
+            log(f"[ERRORE Scansione {citta} pag {pagina}]: {e}")
             break
 
     return lotti
@@ -317,13 +366,15 @@ def estrai_dati_scheda(lotto):
         "stato_procedura": "ATTIVA",
         "mq": None,
         "prezzo_mq": None,
-        "testo_perizia": ""
+        "testo_perizia": "",
+        "scaricata_correttamente": False
     }
     try:
-        r = session.get(lotto["link"], timeout=12)
+        r = session.get(lotto["link"], timeout=(5, 12))
         if r.status_code != 200:
             return dati
 
+        dati["scaricata_correttamente"] = True
         soup = BeautifulSoup(r.text, "html.parser")
         testo_pulito = soup.get_text(separator=" ", strip=True)
         testo_lower = testo_pulito.lower()
@@ -388,39 +439,55 @@ def estrai_dati_scheda(lotto):
         dati["testo_perizia"] = "\n".join(blocchi[:18]) if blocchi else testo_pulito[:4500]
 
     except requests.exceptions.RequestException as e:
-        print(f"[ERRORE RETE Lettura Scheda {lotto['id']}]: {e}")
+        log(f"[TIMEOUT/RETE Scheda {lotto['id']}]: {e}")
     except Exception as e:
-        print(f"[ERRORE Lettura Scheda {lotto['id']}]: {e}")
+        log(f"[ERRORE Lettura Scheda {lotto['id']}]: {e}")
 
     return dati
 
 
 def chiama_gemini_json(prompt):
-    if not client:
+    """
+    Chiama Gemini applicando un timeout rigido di 20s per singola richiesta
+    e cambiando immediatamente modello in caso di errore 503, 429 o 404.
+    """
+    if not client or not MODELLI_ATTIVI:
         return {}
-    for tentativo in range(3):
+
+    for modello in list(MODELLI_ATTIVI)[:4]:
         try:
             response = client.models.generate_content(
-                model=MODELLO_GEMINI,
+                model=modello,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     temperature=0.1,
+                    http_options=types.HttpOptions(timeout=20000),  # 20 secondi max (in millisecondi)
                 ),
             )
-            testo = response.text.strip()
+            testo = (response.text or "").strip()
             if testo.startswith("```"):
                 testo = re.sub(r"^```(?:json)?", "", testo)
                 testo = re.sub(r"```$", "", testo).strip()
-            return json.loads(testo)
+            if testo:
+                return json.loads(testo)
         except Exception as e:
             err_str = str(e)
-            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "503" in err_str or "UNAVAILABLE" in err_str:
-                print(f"[GEMINI AVVISO]: Server sovraccarico (503). Attendo e riprovo (Tentativo {tentativo + 1}/3)...")
-                time.sleep(15 * (tentativo + 1))
+            if "404" in err_str or "NOT_FOUND" in err_str:
+                log(f"[GEMINI] Modello {modello} non trovato (404). Rimosso dalla catena.")
+                if modello in MODELLI_ATTIVI:
+                    MODELLI_ATTIVI.remove(modello)
+            elif "503" in err_str or "UNAVAILABLE" in err_str:
+                log(f"[GEMINI] {modello} sovraccarico (503). Passo subito al modello di fallback...")
+                time.sleep(2)
+            elif "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                log(f"[GEMINI] Quota raggiunta su {modello} (429). Passo al modello di fallback...")
+                time.sleep(4)
             else:
-                print(f"[GEMINI ERRORE]: {e}")
-                break
+                log(f"[GEMINI ERRORE su {modello}]: {e}")
+                time.sleep(2)
+
+    log("[GEMINI CRITICO] Tutti i modelli della catena hanno dato errore per questo batch.")
     return {}
 
 
@@ -451,13 +518,16 @@ def fase2_screening_rapido(batch_lotti):
     }}
     """
     dati = chiama_gemini_json(prompt)
+    if not dati or "screening" not in dati:
+        return None  # Segnala che la chiamata API è fallita (non bruciare i lotti!)
+
     risultati = {}
     for item in dati.get("screening", []):
         item_id = str(item.get("id", ""))
         if item_id:
             is_ok = item.get("idoneo", True)
             risultati[item_id] = is_ok
-            print(f"  -> [DEBUG FASE 2] Lotto {item_id}: Idoneo={is_ok} (Motivo: {item.get('motivo_scarto', '')})")
+            log(f"  -> [FASE 2] Lotto {item_id}: Idoneo={is_ok} (Motivo: {item.get('motivo_scarto', 'OK')})")
     return risultati
 
 
@@ -505,18 +575,23 @@ def fase3_deep_audit_forense(batch_lotti):
     }}
     """
     dati = chiama_gemini_json(prompt)
+    if not dati or "analisi" not in dati:
+        return None  # Segnala fallimento API
+
     risultati_mappati = {}
     for item in dati.get("analisi", []):
         item_id = str(item.get("id", ""))
         if item_id:
             risultati_mappati[item_id] = item
-            print(f"  -> [DEBUG FASE 3] Lotto {item_id}: Verdetto={item.get('verdetto')}, Score={item.get('score_totale')}, Rischio={item.get('rischio_legale')}")
+            log(f"  -> [FASE 3] Lotto {item_id}: Verdetto={item.get('verdetto')}, Score={item.get('score_totale')}, Rischio={item.get('rischio_legale')}")
     return risultati_mappati
 
 
 if __name__ == "__main__":
-    print("=== AVVIO RADAR FORENSE ASTE TERRENI (TOSCANA ESTESA) ===")
+    log("=== AVVIO RADAR FORENSE ASTE TERRENI (TOSCANA ESTESA) ===")
+    inizializza_modelli_gemini()
     visti = carica_visti()
+    log(f"Lotti già presenti in memoria ({FILE_ARCHIVIO}): {len(visti)}")
 
     stats = {
         "pagine_http": 0,
@@ -531,62 +606,92 @@ if __name__ == "__main__":
 
     catalogo_terreni = []
     ids_globali = set()
-    for comune in COMUNI_TARGET:
+    for idx, comune in enumerate(COMUNI_TARGET, start=1):
         lotti_c = scansiona_catalogo_comune(comune, stats)
+        nuovi_comune = 0
         for l in lotti_c:
             if l["id"] not in ids_globali:
                 ids_globali.add(l["id"])
                 catalogo_terreni.append(l)
+                nuovi_comune += 1
+        if nuovi_comune > 0:
+            log(f"[{idx}/{len(COMUNI_TARGET)}] {comune.title()}: trovati {nuovi_comune} annunci terreni.")
 
     stats["terreni_individuati"] = len(catalogo_terreni)
     nuovi_lotti = [l for l in catalogo_terreni if l["id"] not in visti]
     stats["nuovi_non_in_memoria"] = len(nuovi_lotti)
+    log(f"Scansione catalogo completata: {stats['terreni_individuati']} terreni totali, di cui {stats['nuovi_non_in_memoria']} nuovi da analizzare.")
 
     candidati_fase2 = []
-    lotti_processati_id = []
+    lotti_definitivamente_processati = []
 
     for l in nuovi_lotti:
         if stats["schede_scaricate"] >= MAX_SCHEDE_DETTAGLIO_PER_RUN or len(candidati_fase2) >= MAX_CANDIDATI_AI_PER_RUN:
             break
 
-        l.update(estrai_dati_scheda(l))
-        stats["schede_scaricate"] += 1
-        lotti_processati_id.append(l["id"])
+        log(f"Download scheda dettaglio lotto {l['id']} ({l['comune']})...")
+        dati_scheda = estrai_dati_scheda(l)
+        if not dati_scheda["scaricata_correttamente"]:
+            # Errore di rete sul sito: NON segniamo come visto così riprova alla prossima run
+            continue
 
+        l.update(dati_scheda)
+        stats["schede_scaricate"] += 1
+
+        # Se è sospesa, scaduta o fuori budget, la scartiamo e la segniamo come vista per non rileggerla
         if l["stato_procedura"] == "SOSPESA":
+            lotti_definitivamente_processati.append(l["id"])
             continue
         if not e_data_valida_non_passata(l.get("data_asta", "")):
+            lotti_definitivamente_processati.append(l["id"])
             continue
-        if BUDGET_MIN <= l["prezzo_num"] <= BUDGET_MAX:
-            candidati_fase2.append(l)
+        if not (BUDGET_MIN <= l["prezzo_num"] <= BUDGET_MAX):
+            lotti_definitivamente_processati.append(l["id"])
+            continue
 
-        time.sleep(0.4)
+        candidati_fase2.append(l)
+        time.sleep(0.35)
 
     stats["in_budget_e_attivi"] = len(candidati_fase2)
+    log(f"Lotti in budget e attivi pronti per Fase 2 (IA): {len(candidati_fase2)}")
 
     candidati_fase3 = []
     for i in range(0, len(candidati_fase2), 4):
         batch = candidati_fase2[i:i + 4]
         esiti = fase2_screening_rapido(batch)
+        if esiti is None:
+            log("  -> [AVVISO FASE 2] Batch saltato per indisponibilità API: i lotti verranno riprovati al prossimo avvio.")
+            continue
+
         for l in batch:
             l_id = str(l["id"])
             if esiti.get(l_id, True):
                 candidati_fase3.append(l)
+            else:
+                # Scartato dall'IA in Fase 2: lo segniamo come processato
+                lotti_definitivamente_processati.append(l["id"])
         time.sleep(1.5)
 
     stats["superato_screening_fase2"] = len(candidati_fase3)
+    log(f"Lotti qualificati per Fase 3 (Deep Audit Forense): {len(candidati_fase3)}")
 
     graduatoria_finale = []
     for i in range(0, len(candidati_fase3), 2):
         batch = candidati_fase3[i:i + 2]
         analisi_profonda = fase3_deep_audit_forense(batch)
+        if analisi_profonda is None:
+            log("  -> [AVVISO FASE 3] Batch saltato per indisponibilità API: i lotti verranno riprovati al prossimo avvio.")
+            continue
+
         for l in batch:
             l_id_str = str(l["id"])
             deep = analisi_profonda.get(l_id_str, {})
             if not deep:
-                print(f"  -> [DEBUG] Nessun riscontro ID nel JSON di Gemini per il lotto {l_id_str}")
+                log(f"  -> [DEBUG] Nessun riscontro nel JSON per il lotto {l_id_str} (verrà riprovato).")
                 continue
             
+            # Il lotto ha ricevuto l'audit completo: ora possiamo segnarlo come visto!
+            lotti_definitivamente_processati.append(l["id"])
             l["deep_audit"] = deep
             
             mq_ai = deep.get("mq_stimati")
@@ -631,6 +736,7 @@ if __name__ == "__main__":
             f"• <b>Pagine catalogo scaricate:</b> <code>{stats['pagine_http']}</code>\n"
             f"• <b>Annunci immobiliari visti:</b> <code>{stats['annunci_grezzi_visti']}</code>\n"
             f"• <b>Terreni individuati:</b> <code>{stats['terreni_individuati']}</code>\n"
+            f"• <b>Nuovi (non in archivio):</b> <code>{stats['nuovi_non_in_memoria']}</code>\n"
             f"• <b>In budget (&le; {BUDGET_MAX:,}€):</b> <code>{stats['in_budget_e_attivi']}</code>\n"
             f"• <b>Superato screening Fase 2:</b> <code>{stats['superato_screening_fase2']}</code>\n"
             f"• <b>Approvati in Graduatoria:</b> <code>{stats['approvati_in_graduatoria']}</code>\n\n"
@@ -639,5 +745,5 @@ if __name__ == "__main__":
         invia_telegram_html(report_diagnostico)
         aggiorna_data_ultimo_invio()
 
-    segna_visti(lotti_processati_id)
-    print("=== MONITORAGGIO CONCLUSO CON SUCCESSO ===")
+    segna_visti(lotti_definitivamente_processati)
+    log("=== MONITORAGGIO CONCLUSO CON SUCCESSO ===")
