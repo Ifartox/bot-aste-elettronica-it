@@ -19,13 +19,13 @@ FILE_ARCHIVIO = "terreni_visti.txt"
 FILE_ULTIMO_INVIO = "ultimo_invio_terreni.txt"
 FILE_STORICO_MD = "storico_aste_proposte.md"
 
-# Parametri operativi e limiti di sicurezza (Anti-Timeout / Anti-Ban / Risparmio Token)
+# Parametri operativi e limiti di sicurezza
 BUDGET_MIN = 500
 BUDGET_MAX = 50000
-MAX_PAGINE_PER_COMUNE = 4          # Evita centinaia di chiamate HTTP inutili
-MAX_SCHEDE_DETTAGLIO_PER_RUN = 25  # Max schede aperte per singolo avvio
-MAX_CANDIDATI_AI_PER_RUN = 16      # Max lotti inviati a Gemini per singolo avvio
-LIMITE_NOTIFICHE_TELEGRAM = 8      # Max messaggi su Telegram (tutti gli altri vanno sul file .md)
+MAX_PAGINE_PER_COMUNE = 4
+MAX_SCHEDE_DETTAGLIO_PER_RUN = 25
+MAX_CANDIDATI_AI_PER_RUN = 16
+LIMITE_NOTIFICHE_TELEGRAM = 8
 MODELLO_GEMINI = "gemini-2.5-flash"
 
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
@@ -36,9 +36,7 @@ session.headers.update({
     "Accept-Language": "it-IT,it;q=0.9",
 })
 
-# Area Geografica: Provincia di Firenze + Comuni confinanti (Siena, Prato, Pisa)
 COMUNI_TARGET = [
-    # Città Metropolitana di Firenze
     "firenze", "scandicci", "lastra a signa", "signa", "campi bisenzio", 
     "sesto fiorentino", "fiesole", "impruneta", "bagno a ripoli", 
     "san casciano in val di pesa", "montespertoli", "barberino tavarnelle", 
@@ -48,11 +46,8 @@ COMUNI_TARGET = [
     "marradi", "montaione", "montelupo fiorentino", "palazzuolo sul senio", 
     "pelago", "pontassieve", "reggello", "rignano sull'arno", "rufina", 
     "san godenzo", "scarperia e san piero", "vaglia", "vicchio",
-    # Confine Siena
     "san gimignano", "poggibonsi", "castellina in chianti", "radda in chianti",
-    # Confine Prato
     "prato", "carmignano", "poggio a caiano", "vaiano", "cantagallo",
-    # Confine Pisa
     "san miniato", "castelfranco di sotto", "santa maria a monte", "volterra", "palaia"
 ]
 
@@ -68,10 +63,6 @@ BLACKLIST_CATEGORICA = [
     "posto auto", "box auto", "quota di 1/", "nuda proprietà", "usufrutto"
 ]
 
-
-# ==========================================
-# FUNZIONI DI UTILITÀ E GESTIONE STATO
-# ==========================================
 
 def safe_html(val, default="N.D."):
     if val is None or str(val).strip().lower() in ["none", "null", ""]:
@@ -132,7 +123,6 @@ def invia_telegram_html(messaggio):
         r = requests.post(url, json=payload, timeout=15)
         if r.status_code == 429:
             retry_after = r.json().get("parameters", {}).get("retry_after", 5)
-            print(f"[TELEGRAM FLOOD] Attesa di {retry_after} secondi...")
             time.sleep(retry_after + 1)
             requests.post(url, json=payload, timeout=15)
         elif r.status_code != 200:
@@ -144,7 +134,6 @@ def invia_telegram_html(messaggio):
 
 
 def aggiorna_storico_markdown(nuovi_lotti):
-    """Salva ed evidenzia tutte le aste idonee nel documento Markdown su GitHub."""
     header = (
         "# 🌿 Storico e Graduatoria Aste Terreni Proposte\n\n"
         "> Documento aggiornato automaticamente. Le aste sono ordinate per punteggio di qualità e scadenza gara.\n\n"
@@ -161,8 +150,8 @@ def aggiorna_storico_markdown(nuovi_lotti):
                         m_id = re.search(r"\[(\d+)\]", line)
                         if m_id:
                             righe_esistenti[m_id.group(1)] = line.strip()
-        except Exception as e:
-            print(f"[STORICO] Avviso lettura file esistente: {e}")
+        except Exception:
+            pass
 
     for l in nuovi_lotti:
         deep = l.get("deep_audit", {})
@@ -191,14 +180,9 @@ def aggiorna_storico_markdown(nuovi_lotti):
             f.write(header)
             for riga in righe_esistenti.values():
                 f.write(f"{riga}\n")
-        print(f"[STORICO] File {FILE_STORICO_MD} aggiornato con {len(righe_esistenti)} aste totali.")
     except Exception as e:
         print(f"[ERRORE Scrittura Storico MD]: {e}")
 
-
-# ==========================================
-# FASE 1: SCRAPING CATALOGO E PARSING SCHEDA
-# ==========================================
 
 def scansiona_catalogo_comune(citta, stats):
     lotti = []
@@ -215,57 +199,36 @@ def scansiona_catalogo_comune(citta, stats):
                 break
 
             soup = BeautifulSoup(r.text, "html.parser")
-            
-            # CERHIAMO QUALSIASI LINK CHE CONTENGA 'Detail' O 'Aste' O 'Immobili' NEL PORTALE
-            candidati_link = []
-            for a in soup.find_all("a", href=True):
-                href = a["href"]
-                if any(k in href.lower() for k in ["detail", "asta", "immobili", "lotto"]):
-                    candidati_link.append(a)
-
-            if not candidati_link:
+            links_asta = [a for a in soup.find_all("a", href=True) if "/Aste/Detail/" in a["href"]]
+            if not links_asta:
                 break
 
             nuovi_id_in_pagina = 0
-            for a in candidati_link:
+            for a in links_asta:
                 href = a["href"]
-                
-                # Estraiamo qualsiasi sequenza numerica nell'URL che rappresenti l'ID dell'immobile/asta
-                numeri_trovati = re.findall(r"\d{5,}", href)
-                if not numeri_trovati:
-                    # Prova a cercare nel testo o nell'attributo id se l'URL non ha numeri lunghi
-                    parent_div = a.find_parent("div")
-                    if parent_div:
-                        numeri_trovati = re.findall(r"\d{5,}", parent_div.get_text())
-                
-                if not numeri_trovati:
+                parte_dopo = href.split("/Aste/Detail/")[1]
+                asta_id = parte_dopo.split("-")[0].strip().split("/")[0].strip()
+
+                if not asta_id.isdigit() or asta_id in ids_rilevati:
                     continue
-                
-                asta_id = numeri_trovati[0]
-                if asta_id in ids_rilevati:
-                    continue
-                
                 ids_rilevati.add(asta_id)
                 nuovi_id_in_pagina += 1
                 stats["annunci_grezzi_visti"] += 1
 
-                # Raccogliamo tutto il testo associato per capire se è un terreno
-                titolo_url = " ".join(href.split("/"))
+                titolo_url = " ".join(parte_dopo.replace("-", " ").split())
                 testo_link = " ".join(a.get_text(" ", strip=True).split())
                 contesto_card = ""
-                if a.parent:
-                    contesto_card = " ".join(a.parent.get_text(" ", strip=True).split())[:400]
+                if a.parent and a.parent.parent:
+                    contesto_card = " ".join(a.parent.parent.get_text(" ", strip=True).split())[:350]
 
                 testo_combinato = f"{titolo_url} {testo_link} {contesto_card}".lower()
 
-                # Filtro flessibile sui terreni
                 ha_parola_terreno = any(pt in testo_combinato for pt in PAROLE_CHIAVE_TERRENO)
                 ha_parola_blacklist = any(b in testo_combinato for b in BLACKLIST_CATEGORICA)
 
-                # Se non c'è traccia di parole chiave da terreno, scartiamo subito
                 if not ha_parola_terreno:
                     continue
-                if ha_parola_blacklist and "terreno" not in testo_combinato:
+                if ha_parola_blacklist and "terreno" not in titolo_url.lower():
                     continue
 
                 link_completo = href if href.startswith("http") else f"https://www.astalegale.net{href}"
@@ -277,7 +240,7 @@ def scansiona_catalogo_comune(citta, stats):
                     "link": link_completo
                 })
 
-            if nuovi_id_in_pagina == 0 and pagina > 1:
+            if nuovi_id_in_pagina == 0:
                 break
 
             time.sleep(0.35)
@@ -285,13 +248,10 @@ def scansiona_catalogo_comune(citta, stats):
             print(f"[ERRORE Scansione {citta} pag {pagina}]: {e}")
             break
 
-    if lotti:
-        print(f"[{citta.upper()}] Individuati {len(lotti)} potenziali terreni.")
     return lotti
 
 
 def estrai_superficie_terreno(testo):
-    """Estrae la superficie in mq gestendo sia i metri quadri che gli ettari (ha)."""
     m_ha = re.search(r"(?:ettari|ha)\s*[:\.]?\s*(\d{1,3}(?:[\.,]\d{1,4})?)", testo, re.IGNORECASE)
     if not m_ha:
         m_ha = re.search(r"(\d{1,3}(?:[\.,]\d{1,4})?)\s*(?:ettari|ha)\b", testo, re.IGNORECASE)
@@ -416,14 +376,8 @@ def estrai_dati_scheda(lotto):
     return dati
 
 
-# ==========================================
-# FASI 2 E 3: MOTORE AI CON RETRY E IMBUTO
-# ==========================================
-
 def chiama_gemini_json(prompt):
-    """Wrapper con gestione automatica del Rate Limit (429) e parsing sicuro."""
     if not client:
-        print("[AVVISO] Client Gemini non configurato (GEMINI_API_KEY mancante?).")
         return {}
     for tentativo in range(3):
         try:
@@ -443,9 +397,7 @@ def chiama_gemini_json(prompt):
         except Exception as e:
             err_str = str(e)
             if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                attesa = 15 * (tentativo + 1)
-                print(f"[GEMINI RATE LIMIT] Pausa di {attesa}s (tentativo {tentativo + 1}/3)...")
-                time.sleep(attesa)
+                time.sleep(15 * (tentativo + 1))
             else:
                 print(f"[GEMINI ERRORE]: {e}")
                 break
@@ -453,10 +405,9 @@ def chiama_gemini_json(prompt):
 
 
 def fase2_screening_rapido(batch_lotti):
-    """Fase 2 dell'imbuto: scarta rapidamente falsi positivi, quote parziali o fabbricati."""
     payload = [
         {
-            "id": l["id"],
+            "id": str(l["id"]),
             "comune": l["comune"],
             "titolo": l["titolo"],
             "prezzo": l["offerta_minima"],
@@ -465,12 +416,12 @@ def fase2_screening_rapido(batch_lotti):
         for l in batch_lotti
     ]
     prompt = f"""
-    Sei un analista di aste immobiliari. Esegui uno screening rapido su questi lotti (Budget max {BUDGET_MAX}€):
+    Sei un analista immobiliare. Esegui uno screening rapido su questi lotti (Budget max {BUDGET_MAX}€):
     {json.dumps(payload, ensure_ascii=False)}
 
-    REGOLE DI PASSAGGIO ("idoneo": true):
-    1. Deve essere principalmente un TERRENO (agricolo, edificabile, uliveto, bosco, seminativo, pascolo, eventuale piccolo annesso rurale).
-    2. Scarta ("idoneo": false) SOLO SE il lotto è chiaramente un appartamento, casa di civile abitazione, negozio, garage, oppure se è venduta solo una QUOTA INDIVISA minoritaria (es. 1/2, 1/6) o NUDA PROPRIETÀ.
+    REGOLE DI SELEZIONE RIGIDE ("idoneo": true/false):
+    1. Deve trattarsi di un TERRENO (agricolo, edificabile, boschivo, uliveto, seminativo).
+    2. Imposta "idoneo": false se l'immobile principale è un appartamento, fabbricato urbano, negozio, garage, oppure se si vende una quota indivisa minoritaria o nuda proprietà.
 
     Rispondi in JSON:
     {{
@@ -480,14 +431,20 @@ def fase2_screening_rapido(batch_lotti):
     }}
     """
     dati = chiama_gemini_json(prompt)
-    return {str(item["id"]): item.get("idoneo", True) for item in dati.get("screening", [])}
+    risultati = {}
+    for item in dati.get("screening", []):
+        item_id = str(item.get("id", ""))
+        if item_id:
+            is_ok = item.get("idoneo", True)
+            risultati[item_id] = is_ok
+            print(f"  -> [DEBUG FASE 2] Lotto {item_id}: Idoneo={is_ok} (Motivo: {item.get('motivo_scarto', '')})")
+    return risultati
 
 
 def fase3_deep_audit_forense(batch_lotti):
-    """Fase 3 dell'imbuto: analisi profonda della gara, problematiche, gravami e graduatoria (0-100)."""
     payload = [
         {
-            "id": l["id"],
+            "id": str(l["id"]),
             "comune": l["comune"],
             "titolo": l["titolo"],
             "offerta_minima": l["offerta_minima"],
@@ -499,45 +456,43 @@ def fase3_deep_audit_forense(batch_lotti):
     ]
     prompt = f"""
     Sei un perito agrario e legale forense specializzato in aste giudiziarie in Toscana.
-    Analizza in dettaglio queste schede di gara per terreni selezionati:
+    Valuta rigorosamente questi lotti terrieri:
     {json.dumps(payload, ensure_ascii=False, indent=2)}
 
-    ESEGUI UN DEEP READING PER RILEVARE:
-    1. DIRITTO E QUOTE: Verifica se è Piena Proprietà (100%).
-    2. STATO OCCUPAZIONE E CONTRATTI: Verifica se è Libero o Occupato (es. contratto d'affitto agrario opponibile, diritto di prelazione agraria).
-    3. IPOTECHE, SERVITÙ E GRAVAMI: Segnala trascrizioni non cancellabili, servitù passive (elettrodotti, passaggio), sequestri o cause pendenti. Ricorda che le ipoteche volontarie/giudiziarie standard vengono cancellate dal decreto di trasferimento.
-    4. ACCESSIBILITÀ E VINCOLI: Verifica se ha accesso da strada pubblica o se è un fondo intercluso. Segnala vincoli idrogeologici/paesaggistici o abusi edilizi.
-    5. SUPERFICIE (MQ): Se 'mq_rilevati' è null, estrai i mq totali dal testo (1 ettaro = 10.000 mq).
-    6. GRADUATORIA (SCORE 0-100) E VERDETTO:
-       - Assegna un punteggio da 0 a 100 sommando: Convenienza prezzo/mq (max 40 pt) + Pulizia legale/Piena proprietà (max 30 pt) + Qualità terreno/Vicinanza a Firenze-Scandicci/Accessibilità (max 30 pt).
-       - Imposta "verdetto": "CONSIGLIATO" per tutti i terreni in Piena Proprietà (anche se hanno vincoli paesaggistici standard o sono boschivi/agricoli semplici, purché il prezzo sia sensato). Usa "SCARTATO" solo per quote indivise, abusi insanabili costosissimi o blocchi legali gravi.
+    CRITERI DI VALUTAZIONE FORENSE:
+    1. DIRITTO REALE: Verifica la piena proprietà (100%).
+    2. GRAVAMI E VINCOLI: Segnala ipoteche, servitù o vincoli severi.
+    3. SCORE (0-100): Assegna un punteggio basato sulla reale convenienza e pulizia giuridica.
+    4. VERDETTO: "CONSIGLIATO" se il terreno è pulito e conveniente. "SCARTATO" se presenta gravi criticità legali, occupazioni ostili o irregolarità insanabili.
 
     Rispondi RIGOROSAMENTE in JSON:
     {{
       "analisi": [
         {{
-          "id": "ID_LOTTO",
+          "id": "INSERISCI_ESATTAMENTE_L_ID_RICEVUTO",
           "mq_stimati": 5000,
           "destinazione_urbanistica": "Agricolo / Uliveto / Edificabile / Boschivo",
           "diritto_reale": "Piena Proprietà 100%",
-          "stato_occupazione": "Libero / Affitto agrario / Occupato",
-          "ipoteche_gravami": "Ipoteche cancellabili con decreto / Servitù presenti / ...",
-          "accessibilita_vincoli": "Accesso carrabile / Fondo intercluso / Vincolo paesaggistico",
+          "stato_occupazione": "Libero / Occupato",
+          "ipoteche_gravami": "Standard / Gravi",
+          "accessibilita_vincoli": "Accessibile / Intercluso",
           "rischio_legale": "BASSO oppure MEDIO oppure ALTO",
           "score_totale": 75,
           "verdetto": "CONSIGLIATO oppure SCARTATO",
-          "relazione_dettagliata": "Analisi tecnica dettagliata su pro, contro, rischi e potenziale del terreno."
+          "relazione_dettagliata": "Analisi tecnica professionale."
         }}
       ]
     }}
     """
     dati = chiama_gemini_json(prompt)
-    return {str(item["id"]): item for item in dati.get("analisi", [])}
+    risultati_mappati = {}
+    for item in dati.get("analisi", []):
+        item_id = str(item.get("id", ""))
+        if item_id:
+            risultati_mappati[item_id] = item
+            print(f"  -> [DEBUG FASE 3] Lotto {item_id}: Verdetto={item.get('verdetto')}, Score={item.get('score_totale')}, Rischio={item.get('rischio_legale')}")
+    return risultati_mappati
 
-
-# ==========================================
-# MAIN WORKFLOW A IMBUTO CON DIAGNOSTICA
-# ==========================================
 
 if __name__ == "__main__":
     print("=== AVVIO RADAR FORENSE ASTE TERRENI (TOSCANA ESTESA) ===")
@@ -554,7 +509,6 @@ if __name__ == "__main__":
         "approvati_in_graduatoria": 0
     }
 
-    # 1. SCANSIONE CATALOGO
     catalogo_terreni = []
     ids_globali = set()
     for comune in COMUNI_TARGET:
@@ -568,15 +522,11 @@ if __name__ == "__main__":
     nuovi_lotti = [l for l in catalogo_terreni if l["id"] not in visti]
     stats["nuovi_non_in_memoria"] = len(nuovi_lotti)
 
-    print(f"\n[IMBUTO FASE 1] Pagine lette: {stats['pagine_http']} | Annunci visti: {stats['annunci_grezzi_visti']} | Terreni trovati: {stats['terreni_individuati']} | Nuovi: {stats['nuovi_non_in_memoria']}")
-
-    # Estrazione scheda e filtro budget/data con cap anti-timeout
     candidati_fase2 = []
     lotti_processati_id = []
 
     for l in nuovi_lotti:
         if stats["schede_scaricate"] >= MAX_SCHEDE_DETTAGLIO_PER_RUN or len(candidati_fase2) >= MAX_CANDIDATI_AI_PER_RUN:
-            print(f"[PROTEZIONE RUN] Raggiunto limite di {stats['schede_scaricate']} schede lette ({len(candidati_fase2)} in budget). I restanti verranno analizzati al prossimo avvio.")
             break
 
         l.update(estrai_dati_scheda(l))
@@ -584,46 +534,39 @@ if __name__ == "__main__":
         lotti_processati_id.append(l["id"])
 
         if l["stato_procedura"] == "SOSPESA":
-            print(f"  -> Lotto {l['id']} ({l['comune']}): Scartato perché SOSPESA")
             continue
         if not e_data_valida_non_passata(l.get("data_asta", "")):
-            print(f"  -> Lotto {l['id']} ({l['comune']}): Scartato per data asta passata ({l.get('data_asta')})")
             continue
         if BUDGET_MIN <= l["prezzo_num"] <= BUDGET_MAX:
             candidati_fase2.append(l)
-            print(f"  -> Lotto {l['id']} ({l['comune']}): OK IN BUDGET ({l['offerta_minima']}) - Data: {l['data_asta']}")
-        else:
-            print(f"  -> Lotto {l['id']} ({l['comune']}): Fuori budget ({l['offerta_minima']})")
 
         time.sleep(0.4)
 
     stats["in_budget_e_attivi"] = len(candidati_fase2)
-    print(f"[IMBUTO FASE 2] Candidati in budget ({BUDGET_MIN}€ - {BUDGET_MAX}€) inviati allo screening: {len(candidati_fase2)}")
 
-    # 2. SCREENING VELOCE AI (BATCH DA 4)
     candidati_fase3 = []
     for i in range(0, len(candidati_fase2), 4):
         batch = candidati_fase2[i:i + 4]
         esiti = fase2_screening_rapido(batch)
         for l in batch:
-            if esiti.get(str(l["id"]), True):
+            l_id = str(l["id"])
+            if esiti.get(l_id, True):
                 candidati_fase3.append(l)
-            else:
-                print(f"  -> Lotto {l['id']}: Scartato da Screening Fase 2 AI")
         time.sleep(1.5)
 
     stats["superato_screening_fase2"] = len(candidati_fase3)
-    print(f"[IMBUTO FASE 3] Terreni qualificati per il Deep Reading forense: {len(candidati_fase3)}")
 
-    # 3. DEEP READING FORENSE E SCORING (BATCH DA 2)
     graduatoria_finale = []
     for i in range(0, len(candidati_fase3), 2):
         batch = candidati_fase3[i:i + 2]
         analisi_profonda = fase3_deep_audit_forense(batch)
         for l in batch:
-            deep = analisi_profonda.get(str(l["id"]), {})
+            l_id_str = str(l["id"])
+            deep = analisi_profonda.get(l_id_str, {})
             if not deep:
+                print(f"  -> [DEBUG] Nessun riscontro ID nel JSON di Gemini per il lotto {l_id_str}")
                 continue
+            
             l["deep_audit"] = deep
             
             mq_ai = deep.get("mq_stimati")
@@ -631,88 +574,50 @@ if __name__ == "__main__":
                 l["mq"] = int(mq_ai)
                 l["prezzo_mq"] = round(l["prezzo_num"] / l["mq"], 2)
 
-            score_ottenuto = int(deep.get("score_totale", 0))
             verdetto_ai = str(deep.get("verdetto", "")).upper()
-            print(f"  -> Deep Audit Lotto {l['id']} ({l['comune']}): Score {score_ottenuto}/100 - Verdetto: {verdetto_ai}")
-
-            if "CONSIGLIATO" in verdetto_ai and score_ottenuto >= 40:
+            if "CONSIGLIATO" in verdetto_ai:
                 graduatoria_finale.append(l)
         time.sleep(2.0)
 
-    # 4. ORDINAMENTO PER PUNTEGGIO DECRESCENTE E OUTPUT
     graduatoria_finale.sort(key=lambda x: (-int(x["deep_audit"].get("score_totale", 0)), x["prezzo_num"]))
     stats["approvati_in_graduatoria"] = len(graduatoria_finale)
 
-    print(f"\n=== RIEPILOGO DIAGNOSTICO IMBUTO ===")
-    for k, v in stats.items():
-        print(f"  • {k}: {v}")
-
     if graduatoria_finale:
         aggiorna_storico_markdown(graduatoria_finale)
-
         da_inviare = graduatoria_finale[:LIMITE_NOTIFICHE_TELEGRAM]
-        msg_intro = (
+        
+        invia_telegram_html(
             f"🏆 <b>GRADUATORIA ASTE TERRENI (AUDIT FORENSE)</b>\n\n"
-            f"Annunci esaminati: <b>{stats['annunci_grezzi_visti']}</b> | Terreni in budget: <b>{stats['in_budget_e_attivi']}</b>\n"
-            f"Idonei in graduatoria: <b>{len(graduatoria_finale)}</b> (tutti salvati in <code>{FILE_STORICO_MD}</code>).\n\n"
-            f"<i>Ecco le migliori opportunità ordinate per punteggio:</i>"
+            f"Idonei in graduatoria: <b>{len(graduatoria_finale)}</b> (salvati in <code>{FILE_STORICO_MD}</code>)."
         )
-        invia_telegram_html(msg_intro)
 
         for pos, l in enumerate(da_inviare, start=1):
             d = l["deep_audit"]
-            score = d.get("score_totale", 0)
-            rischio = str(d.get("rischio_legale", "MEDIO")).upper()
-            badge_rischio = "🟢 BASSO" if "BASSO" in rischio else "🟡 MEDIO" if "MEDIO" in rischio else "🔴 ALTO"
-            
-            sup_str = f"{l['mq']:,} mq".replace(",", ".") if l.get("mq") else "N.D."
-            pmq_str = f"€ {l['prezzo_mq']:.2f}/mq" if l.get("prezzo_mq") else "N.D."
-
             scheda = (
-                f"#{pos} — ⭐ <b>SCORE: {score}/100</b> | 📍 <b>{safe_html(l['comune'].upper())}</b>\n"
-                f"🔗 <b>Lotto ID:</b> <a href=\"{safe_html(l['link'])}\">{safe_html(l['id'])} — Apri Scheda Gara</a>\n\n"
-                f"🌿 <b>Descrizione:</b> {safe_html(l['titolo'])}\n"
-                f"🏞 <b>Destinazione:</b> <code>{safe_html(d.get('destinazione_urbanistica'))}</code>\n"
-                f"📐 <b>Superficie:</b> <code>{sup_str}</code> | <b>Prezzo/mq:</b> <code>{pmq_str}</code>\n"
-                f"💰 <b>Offerta Minima:</b> <code>{safe_html(l['offerta_minima'])}</code> (Base: {safe_html(l['prezzo_base'])})\n"
-                f"⏳ <b>Scadenza / Data Gara:</b> <code>{safe_html(l['data_asta'])}</code>\n\n"
-                f"⚖️ <b>AUDIT LEGALE &amp; PROBLEMATICHE:</b>\n"
-                f"• <b>Rischio Complessivo:</b> {badge_rischio}\n"
-                f"• <b>Diritto:</b> {safe_html(d.get('diritto_reale'))}\n"
-                f"• <b>Occupazione:</b> {safe_html(d.get('stato_occupazione'))}\n"
-                f"• <b>Ipoteche e Gravami:</b> {safe_html(d.get('ipoteche_gravami'))}\n"
-                f"• <b>Accesso e Vincoli:</b> {safe_html(d.get('accessibilita_vincoli'))}\n\n"
-                f"🔎 <b>RELAZIONE DETTAGLIATA:</b>\n<i>{safe_html(d.get('relazione_dettagliata'))}</i>"
+                f"#{pos} — ⭐ <b>SCORE: {d.get('score_totale')}/100</b> | 📍 <b>{safe_html(l['comune'].upper())}</b>\n"
+                f"🔗 <a href=\"{safe_html(l['link'])}\">Apri Scheda ({l['id']})</a>\n"
+                f"🌿 {safe_html(l['titolo'])}\n"
+                f"💰 <b>Offerta Minima:</b> <code>{safe_html(l['offerta_minima'])}</code>\n"
+                f"⏳ <b>Scadenza:</b> <code>{safe_html(l['data_asta'])}</code>\n"
+                f"💡 <i>{safe_html(d.get('relazione_dettagliata'))}</i>"
             )
             invia_telegram_html(scheda)
 
-        if len(graduatoria_finale) > LIMITE_NOTIFICHE_TELEGRAM:
-            extra = len(graduatoria_finale) - LIMITE_NOTIFICHE_TELEGRAM
-            invia_telegram_html(
-                f"📂 <b>Altri {extra} terreni idonei</b> sono stati registrati nella tabella "
-                f"<code>{FILE_STORICO_MD}</code> sulla tua repository GitHub con le relative date di fine gara."
-            )
-
         aggiorna_data_ultimo_invio()
     else:
-        # AUTO-DIAGNOSTICA ATTIVA QUANDO CI SONO ZERO RISULTATI
-        print("[DIAGNOSTICA] Nessun terreno approvato in questo ciclo. Invio report diagnostico.")
         report_diagnostico = (
             "🛠 <b>REPORT DIAGNOSTICO SCANSIONE TERRENI</b>\n\n"
-            "Nessun nuovo terreno ha superato l'intero imbuto oggi. Ecco i dati reali della scansione appena conclusa:\n\n"
+            "Nessun terreno ha superato i rigorosi filtri forensi oggi. Dati della scansione:\n\n"
             f"• <b>Pagine catalogo scaricate:</b> <code>{stats['pagine_http']}</code>\n"
             f"• <b>Annunci immobiliari visti:</b> <code>{stats['annunci_grezzi_visti']}</code>\n"
-            f"• <b>Terreni individuati a catalogo:</b> <code>{stats['terreni_individuati']}</code>\n"
-            f"• <b>Terreni nuovi (non in archivio):</b> <code>{stats['nuovi_non_in_memoria']}</code>\n"
-            f"• <b>Schede di dettaglio aperte:</b> <code>{stats['schede_scaricate']}</code>\n"
-            f"• <b>In budget (&le; {BUDGET_MAX:,}€) e attivi:</b> <code>{stats['in_budget_e_attivi']}</code>\n"
-            f"• <b>Qualificati dopo Fase 2:</b> <code>{stats['superato_screening_fase2']}</code>\n"
-            f"• <b>Approvati in Graduatoria Finale:</b> <code>{stats['approvati_in_graduatoria']}</code>\n\n"
-            "<i>Se 'Annunci immobiliari visti' è &gt; 0, la connessione al portale funziona regolarmente.</i>"
+            f"• <b>Terreni individuati:</b> <code>{stats['terreni_individuati']}</code>\n"
+            f"• <b>In budget (&le; {BUDGET_MAX:,}€):</b> <code>{stats['in_budget_e_attivi']}</code>\n"
+            f"• <b>Superato screening Fase 2:</b> <code>{stats['superato_screening_fase2']}</code>\n"
+            f"• <b>Approvati in Graduatoria:</b> <code>{stats['approvati_in_graduatoria']}</code>\n\n"
+            "<i>Consulta i log di GitHub Actions per leggere il debug dettagliato delle risposte dell'IA.</i>"
         )
         invia_telegram_html(report_diagnostico)
         aggiorna_data_ultimo_invio()
 
-    # Salva nell'archivio solo i lotti effettivamente scaricati e valutati
     segna_visti(lotti_processati_id)
     print("=== MONITORAGGIO CONCLUSO CON SUCCESSO ===")
