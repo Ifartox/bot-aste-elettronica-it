@@ -415,7 +415,8 @@ def chiama_gemini_json(prompt):
             return json.loads(testo)
         except Exception as e:
             err_str = str(e)
-            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "503" in err_str or "UNAVAILABLE" in err_str:
+                print(f"[GEMINI AVVISO]: Server sovraccarico (503). Attendo e riprovo (Tentativo {tentativo + 1}/3)...")
                 time.sleep(15 * (tentativo + 1))
             else:
                 print(f"[GEMINI ERRORE]: {e}")
