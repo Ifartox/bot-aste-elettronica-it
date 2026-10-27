@@ -212,60 +212,72 @@ def scansiona_catalogo_comune(citta, stats):
             r = session.get(url, timeout=15)
             stats["pagine_http"] += 1
             if r.status_code != 200:
-                print(f"[WARN {citta.upper()}] Pagina {pagina} ha restituito HTTP {r.status_code}")
                 break
 
             soup = BeautifulSoup(r.text, "html.parser")
-            links_asta = [a for a in soup.find_all("a", href=True) if "/Aste/Detail/" in a["href"]]
             
-            # Se nella pagina non ci sono link di aste, il catalogo per questo comune è finito
-            if not links_asta:
+            # CERHIAMO QUALSIASI LINK CHE CONTENGA 'Detail' O 'Aste' O 'Immobili' NEL PORTALE
+            candidati_link = []
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                if any(k in href.lower() for k in ["detail", "asta", "immobili", "lotto"]):
+                    candidati_link.append(a)
+
+            if not candidati_link:
                 break
 
             nuovi_id_in_pagina = 0
-            for a in links_asta:
+            for a in candidati_link:
                 href = a["href"]
-                parte_dopo = href.split("/Aste/Detail/")[1]
-                asta_id = parte_dopo.split("-")[0].strip().split("/")[0].strip()
-
-                if not asta_id.isdigit() or asta_id in ids_rilevati:
+                
+                # Estraiamo qualsiasi sequenza numerica nell'URL che rappresenti l'ID dell'immobile/asta
+                numeri_trovati = re.findall(r"\d{5,}", href)
+                if not numeri_trovati:
+                    # Prova a cercare nel testo o nell'attributo id se l'URL non ha numeri lunghi
+                    parent_div = a.find_parent("div")
+                    if parent_div:
+                        numeri_trovati = re.findall(r"\d{5,}", parent_div.get_text())
+                
+                if not numeri_trovati:
                     continue
+                
+                asta_id = numeri_trovati[0]
+                if asta_id in ids_rilevati:
+                    continue
+                
                 ids_rilevati.add(asta_id)
                 nuovi_id_in_pagina += 1
                 stats["annunci_grezzi_visti"] += 1
 
-                # Estrae sia il titolo dall'URL sia il testo del riquadro HTML intorno al link
-                titolo_url = " ".join(parte_dopo.replace("-", " ").split())
+                # Raccogliamo tutto il testo associato per capire se è un terreno
+                titolo_url = " ".join(href.split("/"))
                 testo_link = " ".join(a.get_text(" ", strip=True).split())
                 contesto_card = ""
-                if a.parent and a.parent.parent:
-                    contesto_card = " ".join(a.parent.parent.get_text(" ", strip=True).split())[:350]
+                if a.parent:
+                    contesto_card = " ".join(a.parent.get_text(" ", strip=True).split())[:400]
 
                 testo_combinato = f"{titolo_url} {testo_link} {contesto_card}".lower()
 
-                # Verifica se è un terreno oppure se non è un fabbricato in blacklist
+                # Filtro flessibile sui terreni
                 ha_parola_terreno = any(pt in testo_combinato for pt in PAROLE_CHIAVE_TERRENO)
                 ha_parola_blacklist = any(b in testo_combinato for b in BLACKLIST_CATEGORICA)
 
-                # Accettiamo il lotto se cita esplicitamente un terreno (e non è un appartamento con giardino),
-                # oppure se non ha parole in blacklist ed è sospetto (verrà verificato in Fase 1/2)
+                # Se non c'è traccia di parole chiave da terreno, scartiamo subito
                 if not ha_parola_terreno:
                     continue
-                if ha_parola_blacklist and "terreno" not in titolo_url.lower():
+                if ha_parola_blacklist and "terreno" not in testo_combinato:
                     continue
 
-                titolo_finale = testo_link if len(testo_link) > 12 else titolo_url
                 link_completo = href if href.startswith("http") else f"https://www.astalegale.net{href}"
 
                 lotti.append({
                     "id": asta_id,
-                    "comune": citta.title(),  # Corretto: .title() in minuscolo!
-                    "titolo": titolo_finale[:140],
+                    "comune": citta.title(),
+                    "titolo": (testo_link if len(testo_link) > 10 else titolo_url)[:140],
                     "link": link_completo
                 })
 
-            # Se la pagina non conteneva nessun nuovo ID rispetto alla precedente, ferma la paginazione
-            if nuovi_id_in_pagina == 0:
+            if nuovi_id_in_pagina == 0 and pagina > 1:
                 break
 
             time.sleep(0.35)
