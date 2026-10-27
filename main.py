@@ -120,14 +120,14 @@ def invia_telegram_html(messaggio):
         "disable_web_page_preview": True
     }
     try:
-        r = requests.post(url, json=payload, timeout=15)
+        r = requests.post(url, json=payload, timeout=12)
         if r.status_code == 429:
             retry_after = r.json().get("parameters", {}).get("retry_after", 5)
             time.sleep(retry_after + 1)
-            requests.post(url, json=payload, timeout=15)
+            requests.post(url, json=payload, timeout=12)
         elif r.status_code != 200:
             payload.pop("parse_mode", None)
-            requests.post(url, json=payload, timeout=15)
+            requests.post(url, json=payload, timeout=12)
     except Exception as e:
         print(f"[TELEGRAM ECCEZIONE]: {e}")
     time.sleep(1.0)
@@ -184,7 +184,6 @@ def aggiorna_storico_markdown(nuovi_lotti):
         print(f"[ERRORE Scrittura Storico MD]: {e}")
 
 
-# FUNZIONE DI SCRAPING ROBUSTA (RIPRISTINATA)
 def scansiona_catalogo_comune(citta, stats):
     lotti = []
     ids_rilevati = set()
@@ -194,7 +193,7 @@ def scansiona_catalogo_comune(citta, stats):
     for pagina in range(1, MAX_PAGINE_PER_COMUNE + 1):
         url = f"{base_url}&page={pagina}" if pagina > 1 else base_url
         try:
-            r = session.get(url, timeout=15)
+            r = session.get(url, timeout=12)
             stats["pagine_http"] += 1
             if r.status_code != 200:
                 break
@@ -259,6 +258,9 @@ def scansiona_catalogo_comune(citta, stats):
                 break
 
             time.sleep(0.35)
+        except requests.exceptions.RequestException as e:
+            print(f"[ERRORE RETE Scansione {citta} pag {pagina}]: {e}")
+            break
         except Exception as e:
             print(f"[ERRORE Scansione {citta} pag {pagina}]: {e}")
             break
@@ -385,6 +387,8 @@ def estrai_dati_scheda(lotto):
 
         dati["testo_perizia"] = "\n".join(blocchi[:18]) if blocchi else testo_pulito[:4500]
 
+    except requests.exceptions.RequestException as e:
+        print(f"[ERRORE RETE Lettura Scheda {lotto['id']}]: {e}")
     except Exception as e:
         print(f"[ERRORE Lettura Scheda {lotto['id']}]: {e}")
 
